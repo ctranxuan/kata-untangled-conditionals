@@ -19,36 +19,61 @@ public class Pipeline {
         boolean testsPassed;
         boolean deploySuccessful = false;
 
-         new TestRunner()
-                .onSuccess(() -> log.info("Tests passed"))
-                .onError(() -> log.error("Tests failed"))
-                .onNone(() -> log.info("No tests"))
-                .run(project)
-                .filter(testResult -> testResult.testsPassed)
-                .flatMap(testResult -> new DeployRunner()
-                                            .onSuccess(() -> log.info("Deployment successful"))
-                                            .onError(() -> log.error("Deployment failed"))
-                                            .deploy(testResult))
-                .filter(__ -> config.sendEmailSummary())
-                .onEmpty(() -> log.info("Email disabled"))
-                .filter(deployResult -> deployResult.testsPassed)
-                .map(deployResult -> deployResult.deploySuccessful ? "Deployment completed successfully"
-                                                                   : "Deployment failed")
+        final TestResult testsResult =
+                new TestRunner().onSuccess(() -> log.info("Tests passed"))
+                                .onError(() -> log.error("Tests failed"))
+                                .onNone(() -> log.info("No tests"))
+                                .run(project).get();
 
-                .orElse(Option.of("Test failed"))
-                .fold(() ->  new Runnable() {
-                          @Override
-                          public void run() {
-                              log.info("Email disabled");
-                          }
-                      },
-                      message -> new Runnable() {
-                          @Override
-                          public void run() {
-                              sendEmail(message);
-                          }
-                      });
-         ;
+        if (testsResult.testsPassed) {
+            deploySuccessful =
+                new DeployRunner()
+                        .onSuccess(() -> log.info("Deployment successful"))
+                        .onError(() -> log.error("Deployment failed"))
+                        .deploy(testsResult).get().deploySuccessful;
+        }
+
+        if (config.sendEmailSummary()) {
+            String message;
+            if (testsResult.testsPassed) {
+                if (deploySuccessful) {
+                    message = "Deployment completed successfully";
+                } else {
+                    message = "Deployment failed";
+                }
+            } else {
+                message = "Tests failed";
+            }
+            sendEmail(message);
+        } else {
+            log.info("Email disabled");
+        }
+//        testResults
+//                .filter(testResult -> testResult.testsPassed)
+//                .flatMap(testResult -> new DeployRunner()
+//                                            .onSuccess(() -> log.info("Deployment successful"))
+//                                            .onError(() -> log.error("Deployment failed"))
+//                                            .deploy(testResult))
+//                .filter(__ -> config.sendEmailSummary())
+//                .onEmpty(() -> log.info("Email disabled"))
+//                .filter(deployResult -> deployResult.testsPassed)
+//                .map(deployResult -> deployResult.deploySuccessful ? "Deployment completed successfully"
+//                                                                   : "Deployment failed")
+//
+//                .orElse(Option.of("Test failed"))
+//                .fold(() ->  new Runnable() {
+//                          @Override
+//                          public void run() {
+//                              log.info("Email disabled");
+//                          }
+//                      },
+//                      message -> new Runnable() {
+//                          @Override
+//                          public void run() {
+//                              sendEmail(message);
+//                          }
+//                      });
+//         ;
 
 //        if (testResult.testsPassed) {
 //            deploySuccessful =
