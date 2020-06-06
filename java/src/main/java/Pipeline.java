@@ -18,74 +18,23 @@ public class Pipeline {
     }
 
     public void run(Project project) {
-        AtomicBoolean testsPassed = new AtomicBoolean();
-        boolean deploySuccessful = false;
+        new TestRunner().onSuccess(() -> log.info("Tests passed"))
+                        .onError(() -> log.error("Tests failed"))
+                        .onNone(() -> log.info("No tests"))
+                        .run(project)
+                        .filter(testResult -> testResult.testsPassed)
+                        .flatMap(testResult -> new DeployRunner()
+                                                    .onSuccess(() -> log.info("Deployment successful"))
+                                                    .onError(() -> log.error("Deployment failed"))
+                                                    .deploy(testResult))
+                        .map(deployResult -> deployResult.deploySuccessful ? "Deployment completed successfully"
+                                                                           : "Deployment failed")
+                        .orElse(Option.of("Tests failed"))
+                        .filter(__ -> config.sendEmailSummary())
+                        .onEmpty(() -> log.info("Email disabled"))
+                        .peek(this::sendEmail)
+                        ;
 
-        deploySuccessful =
-                new TestRunner().onSuccess(() -> log.info("Tests passed"))
-                                .onError(() -> log.error("Tests failed"))
-                                .onNone(() -> log.info("No tests"))
-                                .run(project)
-                                .peek(testResult -> testsPassed.set(testResult.testsPassed))
-                                .filter(testResult -> testResult.testsPassed)
-                                .flatMap(testResult -> new DeployRunner()
-                                                            .onSuccess(() -> log.info("Deployment successful"))
-                                                            .onError(() -> log.error("Deployment failed"))
-                                                            .deploy(testResult))
-                                .map(deployResult -> deployResult.deploySuccessful)
-                                .getOrElse(false)
-                                ;
-
-        if (config.sendEmailSummary()) {
-            String message;
-            if (testsPassed.get()) {
-                if (deploySuccessful) {
-                    message = "Deployment completed successfully";
-                } else {
-                    message = "Deployment failed";
-                }
-            } else {
-                message = "Tests failed";
-            }
-            sendEmail(message);
-        } else {
-            log.info("Email disabled");
-        }
-//        testResults
-//                .filter(testResult -> testResult.testsPassed)
-//                .flatMap(testResult -> new DeployRunner()
-//                                            .onSuccess(() -> log.info("Deployment successful"))
-//                                            .onError(() -> log.error("Deployment failed"))
-//                                            .deploy(testResult))
-//                .filter(__ -> config.sendEmailSummary())
-//                .onEmpty(() -> log.info("Email disabled"))
-//                .filter(deployResult -> deployResult.testsPassed)
-//                .map(deployResult -> deployResult.deploySuccessful ? "Deployment completed successfully"
-//                                                                   : "Deployment failed")
-//
-//                .orElse(Option.of("Test failed"))
-//                .fold(() ->  new Runnable() {
-//                          @Override
-//                          public void run() {
-//                              log.info("Email disabled");
-//                          }
-//                      },
-//                      message -> new Runnable() {
-//                          @Override
-//                          public void run() {
-//                              sendEmail(message);
-//                          }
-//                      });
-//         ;
-
-//        if (testResult.testsPassed) {
-//            deploySuccessful =
-//            new DeployRunner()
-//                    .onSuccess(() -> log.info("Deployment successful"))
-//                    .onError(() -> log.error("Deployment failed"))
-//                    .deploy(testResult).get().deploySuccessful;
-//        }
-//
 //        if (config.sendEmailSummary()) {
 //            log.info("Sending email");
 //            String message;
@@ -109,14 +58,6 @@ public class Pipeline {
         emailer.send(message);
     }
 
-    private boolean deployProject(final Project project) {
-        return "success".equals(project.deploy());
-    }
-
-    private boolean runTests(final Project project) {
-        return "success".equals(project.runTests());
-    }
-
     static final class TestResult {
         private final Project project;
         private final boolean testsPassed;
@@ -129,11 +70,9 @@ public class Pipeline {
 
     private static class DeployResult {
         private final boolean deploySuccessful;
-        private final boolean testsPassed;
 
-        public DeployResult(final boolean deploySuccessful, final boolean testsPassed) {
+        public DeployResult(final boolean deploySuccessful) {
             this.deploySuccessful = deploySuccessful;
-            this.testsPassed = testsPassed;
         }
     }
 
@@ -185,10 +124,10 @@ public class Pipeline {
             if (testResult.testsPassed) {
                 if ("success".equals(testResult.project.deploy())) {
                     onSuccess.run();
-                    return Option.of(new DeployResult(true, testResult.testsPassed));
+                    return Option.of(new DeployResult(true));
                 } else {
                     onError.run();
-                    return Option.of(new DeployResult(false, testResult.testsPassed));
+                    return Option.of(new DeployResult(false));
                 }
             }
             return Option.none();
