@@ -1,3 +1,7 @@
+import java.util.Optional;
+
+import javax.swing.text.html.Option;
+
 import dependencies.Config;
 import dependencies.Emailer;
 import dependencies.Logger;
@@ -16,13 +20,9 @@ public class Pipeline {
 
     public void run(Project project) {
         boolean testsPassed = true;
-        boolean deploySuccessful;
-        boolean canDeploy = true;
+        boolean deploySuccessful = false;
 
-        if (project.hasTests()) {
-            testsPassed = runTests(project);
-            canDeploy = testsPassed;
-        }
+        testsPassed = !project.hasTests() || runTests(project);
 
         if (project.hasTests()) {
             if (testsPassed) {
@@ -34,13 +34,12 @@ public class Pipeline {
             log.info("No tests");
         }
 
-        if (canDeploy) {
+        if (testsPassed) {
             deploySuccessful = deployProject(project);
-        } else {
-            deploySuccessful = false;
         }
 
-        if (canDeploy) {
+
+        if (testsPassed) {
             if (deploySuccessful) {
                 log.info("Deployment successful");
             } else {
