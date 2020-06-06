@@ -15,21 +15,17 @@ public class Pipeline {
     }
 
     public void run(Project project) {
-        boolean testsPassed;
+        boolean testsPassed = true;
         boolean deploySuccessful;
+        boolean canDeploy = true;
 
         if (project.hasTests()) {
-            if ("success".equals(project.runTests())) {
-                testsPassed = true;
-            } else {
-                testsPassed = false;
-            }
-        } else {
-            testsPassed = true;
+            testsPassed = runTests(project);
+            canDeploy = testsPassed;
         }
 
         if (project.hasTests()) {
-            if ("success".equals(project.runTests())) {
+            if (testsPassed) {
                 log.info("Tests passed");
             } else {
                 log.error("Tests failed");
@@ -38,18 +34,14 @@ public class Pipeline {
             log.info("No tests");
         }
 
-        if (testsPassed) {
-            if ("success".equals(project.deploy())) {
-                deploySuccessful = true;
-            } else {
-                deploySuccessful = false;
-            }
+        if (canDeploy) {
+            deploySuccessful = deployProject(project);
         } else {
             deploySuccessful = false;
         }
 
-        if (testsPassed) {
-            if ("success".equals(project.deploy())) {
+        if (canDeploy) {
+            if (deploySuccessful) {
                 log.info("Deployment successful");
             } else {
                 log.error("Deployment failed");
@@ -72,5 +64,13 @@ public class Pipeline {
         } else {
             log.info("Email disabled");
         }
+    }
+
+    private boolean deployProject(final Project project) {
+        return "success".equals(project.deploy());
+    }
+
+    private boolean runTests(final Project project) {
+        return "success".equals(project.runTests());
     }
 }
