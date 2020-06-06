@@ -1,3 +1,5 @@
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import dependencies.Config;
 import dependencies.Emailer;
 import dependencies.Logger;
@@ -16,26 +18,27 @@ public class Pipeline {
     }
 
     public void run(Project project) {
-        boolean testsPassed;
+        AtomicBoolean testsPassed = new AtomicBoolean();
         boolean deploySuccessful = false;
 
-        final TestResult testsResult =
+        deploySuccessful =
                 new TestRunner().onSuccess(() -> log.info("Tests passed"))
                                 .onError(() -> log.error("Tests failed"))
                                 .onNone(() -> log.info("No tests"))
-                                .run(project).get();
-
-        if (testsResult.testsPassed) {
-            deploySuccessful =
-                new DeployRunner()
-                        .onSuccess(() -> log.info("Deployment successful"))
-                        .onError(() -> log.error("Deployment failed"))
-                        .deploy(testsResult).get().deploySuccessful;
-        }
+                                .run(project)
+                                .peek(testResult -> testsPassed.set(testResult.testsPassed))
+                                .filter(testResult -> testResult.testsPassed)
+                                .flatMap(testResult -> new DeployRunner()
+                                                            .onSuccess(() -> log.info("Deployment successful"))
+                                                            .onError(() -> log.error("Deployment failed"))
+                                                            .deploy(testResult))
+                                .map(deployResult -> deployResult.deploySuccessful)
+                                .getOrElse(false)
+                                ;
 
         if (config.sendEmailSummary()) {
             String message;
-            if (testsResult.testsPassed) {
+            if (testsPassed.get()) {
                 if (deploySuccessful) {
                     message = "Deployment completed successfully";
                 } else {
