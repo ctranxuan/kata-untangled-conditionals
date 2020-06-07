@@ -1,9 +1,6 @@
-import static java.util.stream.Collectors.toList;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import dependencies.Config;
@@ -15,7 +12,7 @@ public class Pipeline {
     private enum StepState {
         SUCCESS, FAILED, SKIPPED;
 
-        public static StepState of(final boolean success) {
+        static StepState of(final boolean success) {
             return success ? SUCCESS : FAILED;
         }
     }
@@ -25,15 +22,9 @@ public class Pipeline {
         private final List<Runnable> onFail = new ArrayList<>();
         private final List<Runnable> onSkip = new ArrayList<>();
         private final Function<Project, StepState> execute;
-        private final Project project;
 
-        /*
-         * Passing the project could be an asset: once a project steps are done,
-         * we could trigger steps of another project
-         */
-        Step(final Function<Project, StepState> execute, Project project) {
+        Step(final Function<Project, StepState> execute) {
             this.execute = execute;
-            this.project = project;
         }
 
         Step onSuccess(final Runnable runnable) {
@@ -51,7 +42,13 @@ public class Pipeline {
             return this;
         }
 
-        boolean nextStep() {
+        /**
+         * Executes the step with the given project.
+         *
+         * @param project the project on which the step is executed.
+         * @return {@code true} if and only if the next step can be executed.
+         */
+        boolean execute(final Project project) {
             final StepState state = execute.apply(project);
             switch (state) {
             case SUCCESS:
@@ -69,52 +66,75 @@ public class Pipeline {
         }
     }
 
-    private final Config config;
-    private final Emailer emailer;
+    private static final class MailSender {
+        private boolean firstCall = true;
+        private final Config config;
+        private final Emailer emailer;
+        private final Logger log;
+
+        private MailSender(final Config config, final Emailer emailer, final Logger log) {
+            this.config = config;
+            this.emailer = emailer;
+            this.log = log;
+        }
+
+        private void sendEmail(final String message) {
+            if (firstCall) {
+                firstCall = false;
+                logMailProcess(config);
+            }
+            if (config.sendEmailSummary()) {
+                emailer.send(message);
+            }
+        }
+
+        private void logMailProcess(final Config config) {
+            if (config.sendEmailSummary()) {
+                log.info("Sending email");
+            } else {
+                log.info("Email disabled");
+            }
+        }
+    }
+
     private final Logger log;
+    private final MailSender mailSender;
 
     public Pipeline(Config config, Emailer emailer, Logger log) {
-        this.config = config;
-        this.emailer = emailer;
+        this.mailSender = new MailSender(config, emailer, log);
         this.log = log;
     }
 
     public void run(Project project) {
-        final Step runTests = new Step(this::runTests, project)
-                                .onSuccess(() -> log.info("Tests passed"))
-                                .onFail(() -> log.error("Tests failed"))
-                                .onFail(() -> sendEmail(config, "Tests failed"))
-                                .onSkip(() -> log.info("No tests"));
+        final Step runTests = new Step(this::runTests)
+                                    .onSuccess(() -> log.info("Tests passed"))
+                                    .onFail(() -> log.error("Tests failed"))
+                                    .onFail(() -> sendEmail("Tests failed"))
+                                    .onSkip(() -> log.info("No tests"));
 
-        final Step deployProject = new Step(this::deploy, project)
+        final Step deployProject = new Step(this::deploy)
                                     .onSuccess(() -> log.info("Deployment successful"))
-                                    .onSuccess(() -> sendEmail(config, "Deployment completed successfully"))
+                                    .onSuccess(() -> sendEmail("Deployment completed successfully"))
                                     .onFail(() -> log.error("Deployment failed"))
-                                    .onFail(() -> sendEmail(config, "Deployment failed"));
+                                    .onFail(() -> sendEmail("Deployment failed"));
 
+        // Chain of responsibility (see https://github.com/mariofusco/from-gof-to-lambda)
         Stream.of(runTests, deployProject)
-              .filter(step -> !step.nextStep())
+              .filter(step -> !step.execute(project))
               .findFirst(); // get the first step that fails
-
-        if (!config.sendEmailSummary()) {
-            log.info("Email disabled");
-        }
-    }
-
-    private StepState deploy(final Project project) {
-        return StepState.of("success".equals(project.deploy()));
-    }
-
-    private void sendEmail(final Config config, final String message) {
-        if (config.sendEmailSummary()) {
-            log.info("Sending email");
-            emailer.send(message);
-        }
     }
 
     private StepState runTests(final Project project) {
         return project.hasTests()
                ? StepState.of("success".equals(project.runTests()))
                : StepState.SKIPPED;
+    }
+
+    private StepState deploy(final Project project) {
+        return StepState.of("success".equals(project.deploy()));
+    }
+
+    private void sendEmail(final String message) {
+        mailSender.sendEmail(message);
     }
 }
