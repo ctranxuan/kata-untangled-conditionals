@@ -1,6 +1,9 @@
+import static java.util.stream.Collectors.toList;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import dependencies.Config;
@@ -78,8 +81,8 @@ public class Pipeline {
                                     .onFail(() -> sendEmail(config, "Deployment failed"));
 
         Stream.of(runTests, deployProject)
-              .filter(Step::nextStep)
-              .count();
+              .filter(step -> !step.nextStep())
+              .findFirst();
 
         if (!config.sendEmailSummary()) {
             log.info("Email disabled");
