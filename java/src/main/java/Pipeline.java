@@ -12,14 +12,26 @@ import dependencies.Logger;
 import dependencies.Project;
 
 public class Pipeline {
+    private enum StepState {
+        SUCCESS, FAILED, SKIPPED;
+
+        static StepState of(final boolean success) {
+            return success ? SUCCESS : FAILED;
+        }
+    }
+
     private static final class Step {
         private final List<Runnable> onSuccess = new ArrayList<>();
         private final List<Runnable> onFail = new ArrayList<>();
         private final List<Runnable> onSkip = new ArrayList<>();
-        private final Function<Project, Boolean> execute;
+        private final Function<Project, StepState> execute;
         private final Project project;
 
-        Step(final Function<Project, Boolean> execute, Project project) {
+        /*
+         * Passing the project could be an asset: once a project steps are done,
+         * we could trigger steps of another project
+         */
+        Step(final Function<Project, StepState> execute, Project project) {
             this.execute = execute;
             this.project = project;
         }
@@ -40,17 +52,20 @@ public class Pipeline {
         }
 
         boolean nextStep() {
-            final Boolean success = execute.apply(project);
-            if (success == null) { // FIXME clean code
+            final StepState state = execute.apply(project);
+            switch (state) {
+            case SUCCESS:
+                onSuccess.forEach(Runnable::run);
+                return true;
+            case FAILED:
+                onFail.forEach(Runnable::run);
+                return false;
+            case SKIPPED:
                 onSkip.forEach(Runnable::run);
                 return true;
+            default:
+                throw new IllegalArgumentException("unknown state:" + state);
             }
-            if (success) {
-                onSuccess.forEach(Runnable::run);
-            } else {
-                onFail.forEach(Runnable::run);
-            }
-            return success;
         }
     }
 
@@ -65,14 +80,11 @@ public class Pipeline {
     }
 
     public void run(Project project) {
-        boolean testsPassed;
-        boolean deploySuccessful;
-
         final Step runTests = new Step(this::runTests, project)
-                                .onSuccess(() -> log.info("Tests passed"))
-                                .onFail(() -> log.error("Tests failed"))
-                                .onFail(() -> sendEmail(config, "Tests failed"))
-                                .onSkip(() -> log.info("No tests"));
+                                    .onSuccess(() -> log.info("Tests passed"))
+                                    .onFail(() -> log.error("Tests failed"))
+                                    .onFail(() -> sendEmail(config, "Tests failed"))
+                                    .onSkip(() -> log.info("No tests"));
 
         final Step deployProject = new Step(this::deploy, project)
                                     .onSuccess(() -> log.info("Deployment successful"))
@@ -80,57 +92,18 @@ public class Pipeline {
                                     .onFail(() -> log.error("Deployment failed"))
                                     .onFail(() -> sendEmail(config, "Deployment failed"));
 
+        // Chain of responsibility (see https://github.com/mariofusco/from-gof-to-lambda)
         Stream.of(runTests, deployProject)
               .filter(step -> !step.nextStep())
-              .findFirst();
+              .findFirst(); // get the first step that fails
 
         if (!config.sendEmailSummary()) {
             log.info("Email disabled");
         }
-
-//        if (project.hasTests()) {
-//            if ("success".equals(project.runTests())) {
-//                log.info("Tests passed");
-//                testsPassed = true;
-//            } else {
-//                log.error("Tests failed");
-//                testsPassed = false;
-//            }
-//        } else {
-//            log.info("No tests");
-//            testsPassed = true;
-//        }
-//
-//        if (testsPassed) {
-//            if ("success".equals(project.deploy())) {
-//                log.info("Deployment successful");
-//                deploySuccessful = true;
-//            } else {
-//                log.error("Deployment failed");
-//                deploySuccessful = false;
-//            }
-//        } else {
-//            deploySuccessful = false;
-//        }
-//
-//        if (config.sendEmailSummary()) {
-//            log.info("Sending email");
-//            if (testsPassed) {
-//                if (deploySuccessful) {
-//                    emailer.send("Deployment completed successfully");
-//                } else {
-//                    emailer.send("Deployment failed");
-//                }
-//            } else {
-//                emailer.send("Tests failed");
-//            }
-//        } else {
-//            log.info("Email disabled");
-//        }
     }
 
-    private Boolean deploy(final Project project) {
-        return "success".equals(project.deploy());
+    private StepState deploy(final Project project) {
+        return StepState.of("success".equals(project.deploy()));
     }
 
     private void sendEmail(final Config config, final String message) {
@@ -140,10 +113,9 @@ public class Pipeline {
         }
     }
 
-    private Boolean runTests(final Project project) {
-        if (project.hasTests()) {
-            return "success".equals(project.runTests());
-        }
-        return null;
+    private StepState runTests(final Project project) {
+        return project.hasTests()
+               ? StepState.of("success".equals(project.runTests()))
+               : StepState.SKIPPED;
     }
 }
